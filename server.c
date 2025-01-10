@@ -10,6 +10,7 @@
 #include <string.h>
 
 #define RCVPORT 38199
+#define BUFFER_SIZE  1024
 
 // Структура для передачи задания серверу
 typedef struct {
@@ -25,42 +26,91 @@ typedef struct {
     int right;   // Правый индекс подмассива
 } thread_args_t;
 
-void merge(int arr[], int l, int m, int r) {
-    int i, j, k;
-    int n1 = m - l + 1;
-    int n2 = r - m;
-    int L[n1], R[n2];
+// Функция для обмена двух элементов
+void swap(int *a, int *b) {
+    int temp = *a;
+    *a = *b;
+    *b = temp;
+}
 
-    for (i = 0; i < n1; i++) L[i] = arr[l + i];
-    for (j = 0; j < n2; j++) R[j] = arr[m + 1 + j];
+// Функция для "просеивания" элемента вниз в куче
+void heapify(int *array, int n, int i) {
+    int largest = i; // Инициализируем наибольший элемент как корень
+    int left = 2 * i + 1; // Левый потомок
+    int right = 2 * i + 2; // Правый потомок
 
-    i = 0;
-    j = 0;
-    k = l;
+    // Если левый потомок больше корня
+    if (left < n && array[left] > array[largest])
+        largest = left;
+
+    // Если правый потомок больше самого большого элемента на данный момент
+    if (right < n && array[right] > array[largest])
+        largest = right;
+
+    // Если наибольший элемент не корень
+    if (largest != i) {
+        swap(&array[i], &array[largest]);
+
+        // Рекурсивно просеиваем поддерево
+        heapify(array, n, largest);
+    }
+}
+
+// Основная функция пирамидальной сортировки
+void heapSort(int *array, int n) {
+    // Построение кучи (перегруппировка массива)
+    for (int i = n / 2 - 1; i >= 0; i--)
+        heapify(array, n, i);
+
+    // Один за другим извлекаем элементы из кучи
+    for (int i = n - 1; i > 0; i--) {
+        // Перемещаем текущий корень в конец
+        swap(&array[0], &array[i]);
+
+        // Вызываем процедуру heapify на уменьшенной куче
+        heapify(array, i, 0);
+    }
+}
+
+void merge(int *array, int left, int mid, int right) {
+    int n1 = mid - left + 1;
+    int n2 = right - mid;
+
+    int *L = (int *)malloc(n1 * sizeof(int));
+    int *R = (int *)malloc(n2 * sizeof(int));
+
+    for (int i = 0; i < n1; i++)
+        L[i] = array[left + i];
+    for (int j = 0; j < n2; j++)
+        R[j] = array[mid + 1 + j];
+
+    int i = 0, j = 0, k = left;
     while (i < n1 && j < n2) {
         if (L[i] <= R[j]) {
-            arr[k] = L[i];
+            array[k] = L[i];
             i++;
         } else {
-            arr[k] = R[j];
+            array[k] = R[j];
             j++;
         }
         k++;
     }
 
     while (i < n1) {
-        arr[k] = L[i];
+        array[k] = L[i];
         i++;
         k++;
     }
 
     while (j < n2) {
-        arr[k] = R[j];
+        array[k] = R[j];
         j++;
         k++;
     }
-}
 
+    free(L);
+    free(R);
+}
 // Функция треда вычислителя
 void *calculate(void *arg) {
     // Ожидаем в качестве аргумента указатель на структуру thread_args_t
@@ -69,7 +119,10 @@ void *calculate(void *arg) {
     int left = tinfo->left;
     int right = tinfo->right;
 
-    if (left < right) {
+    if (right - left < 1000) {
+        heapSort(array + left, right - left + 1);
+    }
+    else if (left < right) {
         int m = left + (right - left) / 2;
 
         // Создаем аргументы для левого и правого тредов
@@ -78,8 +131,8 @@ void *calculate(void *arg) {
 
         // Создаем левый и правый треды
         pthread_t left_thread, right_thread;
-        pthread_create(&left_thread, NULL, calculate, &left_args);
-        pthread_create(&right_thread, NULL, calculate, &right_args);
+        pthread_create(&left_thread, NULL, calculate, (void *)&left_args);
+        pthread_create(&right_thread, NULL, calculate, (void *)&right_args);
 
         // Ждем завершения левого и правого тредов
         pthread_join(left_thread, NULL);
@@ -88,7 +141,7 @@ void *calculate(void *arg) {
         // Сливаем отсортированные левый и правый подмассивы
         merge(array, left, m, right);
     }
-    return NULL;
+    pthread_exit(NULL);
 }
 
 // Аргумент для проверяющего клиента треда
@@ -266,30 +319,27 @@ int main(int argc, char **argv) {
 
         int array_size = 0;
         recv(client, &array_size, sizeof(int), 0);
-        int left, right, total_received = 0;
+        int left, right;
         recv(client, &left, sizeof(int), 0);
         printf("left: %d\n", left);
         recv(client, &right, sizeof(int), 0);
         printf("right: %d\n", right);
         printf("array_size: %d\n", array_size);
+
         int *buf = (int *)malloc(sizeof(int) * array_size);
+        int received, total_received = 0;
 
-        int received = recv(client, buf, sizeof(int) * array_size, 0);
-        if (received < 0) {
-            perror("Receiving data from client");
-            exit(EXIT_FAILURE);
+        while (total_received < array_size*sizeof(int)) {
+            received = recv(client, buf + total_received / sizeof(int), sizeof(int) * BUFFER_SIZE, 0);
+            if (received < 0) {
+                perror("Receiving data from client");
+                exit(EXIT_FAILURE);
+            }
+            total_received += received;
+            printf("bytes_received: %d\n", received);
         }
-
-        printf("bytes_received: %d\n", received);
-
-        printf("received array: ");
-        for (int i = 0; i < array_size; i++) {
-            printf("%d ", buf[i]);
-        }
-        printf("\n");
-
         printf("total received: %d\n", total_received);
-        if (received != array_size * sizeof(int) || left < 0 || right < 0) {
+        if (total_received != array_size * sizeof(int) || left < 0 || right < 0) {
             fprintf(stderr, "Invalid data from %s on port %d, reset peer\n",
                     inet_ntoa(addrclient.sin_addr), ntohs(addrclient.sin_port));
             close(client);
@@ -301,16 +351,17 @@ int main(int argc, char **argv) {
             data.array = buf;
             data.left = left;
             data.right = right;
-            calculate(&data);
+            pthread_t thread;
+            pthread_create(&thread, NULL, calculate, &data);
+            pthread_join(thread, NULL);
 
             int sent = send(client, buf, sizeof(int) * array_size, 0);
             printf("sent: %d\n", sent);
-
             close(client);
-
             isbusy = 0;
             fprintf(stdout, "Calculate and send finish!\n");
         }
+        free(buf);
     }
 
     return (EXIT_SUCCESS);

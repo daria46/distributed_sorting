@@ -10,6 +10,7 @@
 #include <string.h>
 
 #define RCVPORT 38199
+#define BUFFER_SIZE  1024
 
 // Структура для отправки задания серверу
 typedef struct {
@@ -61,10 +62,25 @@ void *send_thread(void *arg) {
         perror("Sending array to server failed");
         exit(EXIT_FAILURE);
     }
+    printf("sent: %d\n", sent_bytes);
 
-    int *buf = malloc(sizeof(int) * (task_data->right - task_data->left + 1));
-    int recv_byte = recv(servsock, buf, sizeof(int) * (task_data->right - task_data->left + 1), 0);
-    if (recv_byte == 0) {
+    int array_size = task_data->right - task_data->left + 1;
+    int *buf = (int *)malloc(sizeof(int) * array_size);
+    int received, total_received = 0;
+
+    while (total_received < array_size*sizeof(int)) {
+        received = recv(servsock, buf + total_received / sizeof(int), sizeof(int) * BUFFER_SIZE, 0);
+        if (received== 0) {
+            fprintf(stderr, "Server %s on port %d die!\nCancel calculate, on all",
+                inet_ntoa(task_data->server->sin_addr),
+                ntohs(task_data->server->sin_port));
+            exit(EXIT_FAILURE);
+            break;
+        }
+        total_received += received;
+    }
+    printf("received: %d\n", sent_bytes);
+    if (total_received== 0) {
         fprintf(stderr, "Server %s on port %d die!\nCancel calculate, on all",
                 inet_ntoa(task_data->server->sin_addr),
                 ntohs(task_data->server->sin_port));
